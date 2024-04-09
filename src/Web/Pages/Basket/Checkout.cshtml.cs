@@ -14,6 +14,7 @@ using Microsoft.eShopWeb.ApplicationCore.Interfaces;
 using Microsoft.eShopWeb.Infrastructure.Identity;
 using Microsoft.eShopWeb.Web.Interfaces;
 using Microsoft.Extensions.Options;
+using Microsoft.eShopWeb.ApplicationCore.Models;
 
 namespace Microsoft.eShopWeb.Web.Pages.Basket;
 
@@ -61,11 +62,12 @@ public class CheckoutModel : PageModel
                 return BadRequest();
             }
 
+            Address shippingAddress = new Address("123 Main St.", "Kent", "OH", "United States", "44240");
             var updateModel = items.ToDictionary(b => b.Id.ToString(), b => b.Quantity);
             await _basketService.SetQuantities(BasketModel.Id, updateModel);
-            await _orderService.CreateOrderAsync(BasketModel.Id, new Address("123 Main St.", "Kent", "OH", "United States", "44240"));
+            await _orderService.CreateOrderAsync(BasketModel.Id, shippingAddress);
             await _basketService.DeleteBasketAsync(BasketModel.Id);
-            await ReserveItemsFromOrder(BasketModel.Items);
+            await ReserveItemsFromOrder(BasketModel.Items, shippingAddress);
 
         }
         catch (EmptyBasketOnCheckoutException emptyBasketOnCheckoutException)
@@ -106,14 +108,32 @@ public class CheckoutModel : PageModel
         Response.Cookies.Append(Constants.BASKET_COOKIENAME, _username, cookieOptions);
     }
 
-    private async Task ReserveItemsFromOrder(List<BasketItemViewModel> basketItems)
+    private async Task ReserveItemsFromOrder(List<BasketItemViewModel> basketItems, Address shippingAddress)
     {
-        var itemsToReservation = basketItems.Select(i => new {CatalogItemId = i. CatalogItemId, Quantity = i.Quantity});
+        var orderItems = basketItems.Select(i =>
+            new OrderItemDto
+            {
+                Id = Guid.NewGuid().ToString(),
+                CatalogItemId = i.CatalogItemId, 
+                ProductName = i.ProductName,
+                UnitPrice = i.UnitPrice,
+                Quantity = i.Quantity,
+            }).ToList();
 
-        StringContent content = ToJson(itemsToReservation);
+        decimal finalPrice = basketItems.Sum(i => i.UnitPrice * i.Quantity);
+
+        var order = new OrderDto {
+            Id = Guid.NewGuid().ToString(),
+            CountryCity = $"{shippingAddress?.Country}_{shippingAddress?.City}",
+            ShippingAddress = $"{shippingAddress?.Country},{shippingAddress?.City},{shippingAddress?.Street},{shippingAddress?.ZipCode}",  
+            OrderItems = orderItems,
+            FinalPrice = finalPrice
+        };
+
+        StringContent content = ToJson(order);
 
         var client = new HttpClient();
-        var response = await client.PostAsync(_baseUrlConfiguration.ReservationBase, content);
+        var response = await client.PostAsync(_baseUrlConfiguration.DeliveryOrderProcessorBase, content);
         await response.Content.ReadAsStringAsync();
     }
 
