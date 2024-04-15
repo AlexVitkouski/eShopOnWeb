@@ -14,7 +14,8 @@ using Microsoft.eShopWeb.ApplicationCore.Interfaces;
 using Microsoft.eShopWeb.Infrastructure.Identity;
 using Microsoft.eShopWeb.Web.Interfaces;
 using Microsoft.Extensions.Options;
-using Microsoft.eShopWeb.ApplicationCore.Models;
+using Azure.Messaging.ServiceBus;
+using Azure.Messaging;
 
 namespace Microsoft.eShopWeb.Web.Pages.Basket;
 
@@ -62,12 +63,11 @@ public class CheckoutModel : PageModel
                 return BadRequest();
             }
 
-            Address shippingAddress = new Address("123 Main St.", "Kent", "OH", "United States", "44240");
             var updateModel = items.ToDictionary(b => b.Id.ToString(), b => b.Quantity);
             await _basketService.SetQuantities(BasketModel.Id, updateModel);
-            await _orderService.CreateOrderAsync(BasketModel.Id, shippingAddress);
+            await _orderService.CreateOrderAsync(BasketModel.Id, new Address("123 Main St.", "Kent", "OH", "United States", "44240"));
             await _basketService.DeleteBasketAsync(BasketModel.Id);
-            await ReserveItemsFromOrder(BasketModel.Items, shippingAddress);
+            await ReserveItemsFromOrder(BasketModel.Items);
 
         }
         catch (EmptyBasketOnCheckoutException emptyBasketOnCheckoutException)
@@ -108,33 +108,19 @@ public class CheckoutModel : PageModel
         Response.Cookies.Append(Constants.BASKET_COOKIENAME, _username, cookieOptions);
     }
 
-    private async Task ReserveItemsFromOrder(List<BasketItemViewModel> basketItems, Address shippingAddress)
+    private async Task ReserveItemsFromOrder(List<BasketItemViewModel> basketItems)
     {
-        var orderItems = basketItems.Select(i =>
-            new OrderItemDto
-            {
-                Id = Guid.NewGuid().ToString(),
-                CatalogItemId = i.CatalogItemId, 
-                ProductName = i.ProductName,
-                UnitPrice = i.UnitPrice,
-                Quantity = i.Quantity,
-            }).ToList();
+        var busConnectionString = Environment.GetEnvironmentVariable("ServiceBusConnectionString");
+        var queueName = Environment.GetEnvironmentVariable("QueueName");
 
-        decimal finalPrice = basketItems.Sum(i => i.UnitPrice * i.Quantity);
+        await using var client = new ServiceBusClient(busConnectionString);
+        ServiceBusSender sender = client.CreateSender(queueName);
 
-        var order = new OrderDto {
-            Id = Guid.NewGuid().ToString(),
-            CountryCity = $"{shippingAddress?.Country}_{shippingAddress?.City}",
-            ShippingAddress = $"{shippingAddress?.Country},{shippingAddress?.City},{shippingAddress?.Street},{shippingAddress?.ZipCode}",  
-            OrderItems = orderItems,
-            FinalPrice = finalPrice
-        };
+        var itemsToReservation = basketItems.Select(i => new { CatalogItemId = i.CatalogItemId, Quantity = i.Quantity });
 
-        StringContent content = ToJson(order);
-
-        var client = new HttpClient();
-        var response = await client.PostAsync(_baseUrlConfiguration.DeliveryOrderProcessorBase, content);
-        await response.Content.ReadAsStringAsync();
+        string messageContent = JsonSerializer.Serialize(itemsToReservation);
+        var message = new ServiceBusMessage(messageContent);
+        await sender.SendMessageAsync(message);
     }
 
     private StringContent ToJson(object obj)
