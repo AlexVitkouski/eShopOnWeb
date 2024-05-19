@@ -10,7 +10,7 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /app
 
-COPY *.sln .
+COPY *.sln ./
 COPY . .
 WORKDIR /app/src/Web
 RUN dotnet restore
@@ -22,6 +22,6 @@ WORKDIR /app
 COPY --from=build /app/src/Web/out ./
 
 # Optional: Set this here if not setting it from docker-compose.yml
-# ENV ASPNETCORE_ENVIRONMENT Development
+ENV ASPNETCORE_ENVIRONMENT Development
 
 ENTRYPOINT ["dotnet", "Web.dll"]
